@@ -1,0 +1,35 @@
+name: GitHub 이슈 종료 시 Jira Task 자동 완료 처리
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  close-jira-issue:
+    name: Close linked Jira issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Jira 로그인
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+
+      # 코멘트에서 Jira 이슈키 추출 (맨 처음 발견되는 [A-Z]+-[0-9]+ 패턴 사용)
+      - name: Jira 이슈키 추출
+        id: extract_jira
+        run: |
+          echo "${{ toJson(github.event.issue.comments_url) }}"
+          COMMENTS=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" ${{ github.event.issue.comments_url }} | jq -r '.[].body')
+          echo "$COMMENTS" | grep -oE '[A-Z]+-[0-9]+' | head -1 > jira_key.txt
+          echo "JIRA_KEY=$(cat jira_key.txt)" >> $GITHUB_ENV
+          
+      - name: Jira 이슈 완료 처리 (상태 전환)
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ env.JIRA_KEY }}
+          transition: 완료
