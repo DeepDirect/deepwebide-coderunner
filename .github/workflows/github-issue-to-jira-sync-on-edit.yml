@@ -1,0 +1,88 @@
+name: Github 이슈 수정 시 Jira Task 자동 갱신
+
+on:
+  issues:
+    types: [edited]
+
+permissions:
+  issues: write
+
+jobs:
+  update-jira-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Jira 필드 정보 추출
+        id: extract_info
+        run: |
+          echo "EPIC_KEY=$(echo '${{ github.event.issue.body }}' | grep -oE 'epic: [A-Z]+-[0-9]+' | awk '{print $2}')" >> $GITHUB_ENV
+          echo "START_DATE=$(echo '${{ github.event.issue.body }}' | grep -oE 'start: [0-9]{4}-[0-9]{2}-[0-9]{2}' | awk '{print $2}')" >> $GITHUB_ENV
+          echo "DUE_DATE=$(echo '${{ github.event.issue.body }}' | grep -oE 'due: [0-9]{4}-[0-9]{2}-[0-9]{2}' | awk '{print $2}')" >> $GITHUB_ENV
+
+      - name: Github 이슈 코멘트에서 Jira 키 추출
+        id: extract_jira_key
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comments = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            const jiraKeyRegex = /Jira 이슈가 생성되었습니다:[^[]*\[([A-Z]+-\d+)\]/;
+            let jiraKey = null;
+            for (const comment of comments.data.reverse()) {
+              const match = jiraKeyRegex.exec(comment.body);
+              if (match) {
+                jiraKey = match[1];
+                break;
+              }
+            }
+            if (!jiraKey) throw new Error("Jira 이슈키를 찾을 수 없습니다.");
+            core.setOutput("jiraKey", jiraKey);
+
+      - name: Jira Task 필드 수정 (에픽/일정/제목/본문)
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_ISSUE_KEY: ${{ steps.extract_jira_key.outputs.jiraKey }}
+          EPIC_KEY: ${{ env.EPIC_KEY }}
+          START_DATE: ${{ env.START_DATE }}
+          DUE_DATE: ${{ env.DUE_DATE }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_USER: ${{ github.event.issue.user.login }}
+        run: |
+          JSON=$(jq -n \
+            --arg summary "$ISSUE_TITLE" \
+            --arg description "GitHub Issue: [$ISSUE_TITLE]($ISSUE_URL)\n작성자: $ISSUE_USER\n본문:\n$ISSUE_BODY" \
+            --arg epic "$EPIC_KEY" \
+            --arg start "$START_DATE" \
+            --arg due "$DUE_DATE" \
+            '{
+              fields: {
+                summary: $summary,
+                description: $description,
+                customfield_10014: $epic,
+                customfield_10015: $start,
+                duedate: $due
+              }
+            }'
+          )
+          curl -X PUT \
+            -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --url "${JIRA_BASE_URL}/rest/api/2/issue/${JIRA_ISSUE_KEY}" \
+            -d "$JSON"
+
+      - name: Github 이슈에 수정 결과 안내 코멘트
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `♻️ **Jira Task 정보가 업데이트 되었습니다.**`
+            })
