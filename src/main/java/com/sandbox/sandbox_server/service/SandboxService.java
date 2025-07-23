@@ -1,15 +1,11 @@
 package com.sandbox.sandbox_server.service;
 
+import com.sandbox.sandbox_server.util.DockerfileUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
+import java.io.*;
+import java.nio.file.*;
 import java.util.UUID;
 
 @Service
@@ -29,11 +25,32 @@ public class SandboxService {
         // 3. 압축 해제
         unzip(zipPath.toFile(), projectDir.toFile());
 
-        return uuid;
+        // 4. Dockerfile 자동 생성
+        DockerfileUtil.generateDockerfile(projectDir, framework);
+
+        // 5. 랜덤 포트 할당(12000~13000)
+        int port = 12000 + (int) (Math.random() * 1000);
+
+        // 6. 도커 빌드 & 실행 (build_and_run.sh 호출)
+        String script = String.format("bash scripts/build_and_run.sh %s %d %s", uuid, port, framework);
+        ProcessBuilder pb = new ProcessBuilder(script.split(" "));
+        pb.directory(new File(".")); // 루트 기준 실행
+        pb.inheritIO(); // (로그 직접 보기 원할 때)
+        Process proc = pb.start();
+        try {
+            if (proc.waitFor() != 0) {
+                throw new IOException("도커 빌드/실행 실패");
+            }
+        } catch (InterruptedException e) {
+            throw new IOException("도커 빌드/실행 실패(Interrupted)");
+        }
+
+        // 7. 실행 정보 리턴
+        // uuid:port 형태로 반환 (컨트롤러에서 분리)
+        return uuid + ":" + port;
     }
 
     private void unzip(File zipFile, File destDir) throws IOException {
-        // 리눅스/맥 환경에서는 명령어로 빠르게 (java.util.zip로 해도 무방)
         try {
             ProcessBuilder pb = new ProcessBuilder(
                     "unzip", zipFile.getAbsolutePath(), "-d", destDir.getAbsolutePath()
