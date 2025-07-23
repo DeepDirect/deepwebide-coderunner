@@ -5,10 +5,10 @@ WORKDIR="./uploads/$UUID"
 IMG="sandbox-$UUID"
 CONTAINER="sandbox-$UUID"
 
-# 빌드
-docker build -t $IMG $WORKDIR
+# 이미지 빌드
+docker build -t $IMG $WORKDIR || exit 1
 
-# 실행 포트 선택
+# 실행 포트 매핑
 if [ "$FRAMEWORK" = "spring" ]; then
   APPPORT=8080
 elif [ "$FRAMEWORK" = "react" ]; then
