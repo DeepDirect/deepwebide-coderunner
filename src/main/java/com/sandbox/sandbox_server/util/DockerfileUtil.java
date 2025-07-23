@@ -15,8 +15,9 @@ public class DockerfileUtil {
                 RUN apt-get update && apt-get install -y findutils
                 RUN chmod +x gradlew
                 RUN ./gradlew build --no-daemon
+                RUN bash -c 'cp $(ls -S build/libs/*.jar | head -n 1) app.jar'
                 EXPOSE 8080
-                CMD ["java", "-jar", "build/libs/*.jar"]
+                CMD ["java", "-jar", "app.jar"]
                 """;
         } else if ("react".equals(framework)) {
             content = """
