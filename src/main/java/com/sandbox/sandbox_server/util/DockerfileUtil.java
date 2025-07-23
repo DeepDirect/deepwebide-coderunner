@@ -9,9 +9,11 @@ public class DockerfileUtil {
         String content;
         if ("spring".equals(framework)) {
             content = """
-                FROM openjdk:17
+                FROM openjdk:17-slim
                 WORKDIR /app
                 COPY . .
+                RUN apt-get update && apt-get install -y findutils
+                RUN chmod +x gradlew
                 RUN ./gradlew build --no-daemon
                 EXPOSE 8080
                 CMD ["java", "-jar", "build/libs/*.jar"]
