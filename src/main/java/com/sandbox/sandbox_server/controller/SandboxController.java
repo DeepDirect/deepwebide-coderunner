@@ -26,8 +26,18 @@ public class SandboxController {
             @RequestParam("projectZip") MultipartFile projectZip
     ) {
         try {
-            String uuid = sandboxService.saveAndExtractProject(framework, projectZip);
-            return ResponseEntity.ok(Map.of("projectId", uuid));
+            // uuid:port 형태로 결과를 반환받음
+            String result = sandboxService.saveAndExtractProject(framework, projectZip);
+            String[] arr = result.split(":");
+            String uuid = arr[0];
+            String port = arr[1];
+            return ResponseEntity.ok(
+                    Map.of(
+                            "projectId", uuid,
+                            "port", port,
+                            "url", "http://localhost:" + port
+                    )
+            );
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
