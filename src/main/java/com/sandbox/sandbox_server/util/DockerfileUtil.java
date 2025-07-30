@@ -172,37 +172,63 @@ public class DockerfileUtil {
         return """
             FROM python:3.11-slim
             
-            # 시스템 패키지 업데이트
+            WORKDIR /app
+            
+            # 시스템 패키지 설치
             RUN apt-get update && \\
                 apt-get install -y curl && \\
                 rm -rf /var/lib/apt/lists/*
             
-            WORKDIR /app
-            
-            # requirements.txt 먼저 복사 (캐시 최적화)
-            COPY requirements.txt ./
-            
-            # Python 패키지 설치
-            RUN if [ -f requirements.txt ]; then \\
-                    pip install --no-cache-dir --upgrade pip && \\
-                    pip install --no-cache-dir -r requirements.txt; \\
-                else \\
-                    echo "Installing default FastAPI packages..." && \\
-                    pip install --no-cache-dir fastapi uvicorn; \\
-                fi
-            
-            # 소스 코드 복사
+            # 모든 파일 복사
             COPY . .
             
-            # main.py 파일 확인
-            RUN if [ ! -f main.py ]; then \\
-                    echo "ERROR: main.py not found!" && \\
-                    echo "Available files:" && ls -la && \\
-                    exit 1; \\
+            # 구조 확인
+            RUN echo "=== Project structure ===" && \\
+                find . -name "*.py" | head -10
+            
+            # main.py 파일 처리 (이미 빌드 전에 정규화됨)
+            RUN if [ ! -f "main.py" ]; then \\
+                    echo "Creating default main.py" && \\
+                    echo 'from fastapi import FastAPI' > main.py && \\
+                    echo 'import uvicorn' >> main.py && \\
+                    echo '' >> main.py && \\
+                    echo 'app = FastAPI()' >> main.py && \\
+                    echo '' >> main.py && \\
+                    echo '@app.get("/")' >> main.py && \\
+                    echo 'async def root():' >> main.py && \\
+                    echo '    return {"message": "Hello FastAPI!", "status": "running"}' >> main.py && \\
+                    echo '' >> main.py && \\
+                    echo '@app.get("/health")' >> main.py && \\
+                    echo 'async def health():' >> main.py && \\
+                    echo '    return {"status": "healthy"}' >> main.py && \\
+                    echo '' >> main.py && \\
+                    echo 'if __name__ == "__main__":' >> main.py && \\
+                    echo '    uvicorn.run(app, host="0.0.0.0", port=8000)' >> main.py; \\
                 fi
             
+            # pip 업그레이드
+            RUN pip install --upgrade pip
+            
+            # 패키지 설치
+            RUN if [ -f "requirements.txt" ]; then \\
+                    echo "Installing from requirements.txt" && \\
+                    pip install --no-cache-dir -r requirements.txt; \\
+                else \\
+                    echo "Installing default packages" && \\
+                    pip install --no-cache-dir fastapi uvicorn[standard]; \\
+                fi
+            
+            # 최종 확인
+            RUN echo "=== Final check ===" && \\
+                ls -la && \\
+                echo "=== main.py content ===" && \\
+                cat main.py
+            
+            # 정리
+            RUN rm -f *.iml && rm -f .DS_Store
+            
             EXPOSE 8000
-            CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+            CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
             """;
     }
 }
