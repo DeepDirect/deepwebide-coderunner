@@ -19,46 +19,87 @@ public class DockerfileUtil {
     private static String generateSpringDockerfile() {
         return """
             FROM openjdk:17-slim
+            WORKDIR /app
+            
+            # 시스템 패키지 설치
+            RUN apt-get update && \\
+                apt-get install -y curl wget unzip && \\
+                rm -rf /var/lib/apt/lists/*
             
             # Gradle 설치 (gradlew가 없는 경우를 위해)
-            RUN apt-get update && apt-get install -y wget unzip && \\
-                wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip && \\
+            RUN wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip && \\
                 unzip -q gradle-8.5-bin.zip && \\
                 mv gradle-8.5 /opt/gradle && \\
-                rm gradle-8.5-bin.zip && \\
-                apt-get clean && \\
-                rm -rf /var/lib/apt/lists/*
+                rm gradle-8.5-bin.zip
             
             ENV GRADLE_HOME=/opt/gradle
             ENV PATH=$GRADLE_HOME/bin:$PATH
             
-            WORKDIR /app
+            # 프로젝트 파일 복사
             COPY . .
             
-            # Gradle Wrapper가 있으면 사용, 없으면 시스템 Gradle 사용
-            RUN if [ -f gradlew ]; then \\
-                    chmod +x gradlew && ./gradlew build --no-daemon -x test; \\
-                elif [ -f build.gradle ]; then \\
-                    gradle build --no-daemon -x test; \\
-                elif [ -f pom.xml ]; then \\
-                    apt-get update && apt-get install -y maven && \\
-                    mvn clean package -DskipTests; \\
-                else \\
-                    echo "No build file found" && exit 1; \\
-                fi
+            # Gradle 실행 권한 설정
+            RUN if [ -f gradlew ]; then chmod +x gradlew; fi
             
-            # JAR 파일 찾기 및 복사
-            RUN JAR_FILE=$(find . -name "*.jar" -path "*/build/libs/*" -o -path "*/target/*" | head -n 1) && \\
-                if [ -n "$JAR_FILE" ]; then \\
-                    echo "Found JAR file: $JAR_FILE" && \\
-                    cp "$JAR_FILE" app.jar; \\
+            # 빌드 실행 (bootJar 태스크 명시적으로 실행)
+            RUN if [ -f gradlew ]; then \\
+                    echo "Building with Gradle Wrapper..." && \\
+                    ./gradlew clean bootJar --no-daemon -x test --info; \\
+                elif [ -f build.gradle ]; then \\
+                    echo "Building with system Gradle..." && \\
+                    gradle clean bootJar --no-daemon -x test --info; \\
+                elif [ -f pom.xml ]; then \\
+                    echo "Building with Maven..." && \\
+                    apt-get update && apt-get install -y maven && \\
+                    mvn clean package spring-boot:repackage -DskipTests; \\
                 else \\
-                    echo "No JAR file found. Available files:" && \\
-                    find . -name "*.jar" && \\
+                    echo "No build file found!" && \\
+                    ls -la && \\
                     exit 1; \\
                 fi
             
+            # 빌드 결과 확인
+            RUN echo "Build completed. Checking for JAR files:" && \\
+                find . -name "*.jar" -type f && \\
+                echo "Checking build/libs directory:" && \\
+                ls -la build/libs/ 2>/dev/null || echo "No build/libs directory"
+            
+            # Spring Boot JAR 파일 찾기 및 복사 (더 정확한 방법)
+            RUN echo "Looking for Spring Boot JAR file..." && \\
+                JAR_FILE=$(find build/libs -name "*-boot.jar" -o -name "*-SNAPSHOT.jar" -o -name "*.jar" | grep -v "plain" | head -n 1) && \\
+                if [ -z "$JAR_FILE" ]; then \\
+                    echo "Trying alternative JAR search..." && \\
+                    JAR_FILE=$(find . -name "*.jar" -path "*/build/libs/*" -o -path "*/target/*" | grep -v "plain" | head -n 1); \\
+                fi && \\
+                if [ -n "$JAR_FILE" ]; then \\
+                    echo "Found JAR file: $JAR_FILE" && \\
+                    echo "JAR file details:" && \\
+                    ls -la "$JAR_FILE" && \\
+                    echo "Checking JAR manifest:" && \\
+                    jar tf "$JAR_FILE" | grep -E "MANIFEST.MF|BOOT-INF" | head -5 && \\
+                    cp "$JAR_FILE" app.jar && \\
+                    echo "JAR file copied successfully"; \\
+                else \\
+                    echo "ERROR: No suitable JAR file found!" && \\
+                    echo "Available files in build/libs:" && \\
+                    ls -la build/libs/ 2>/dev/null || echo "No build/libs directory" && \\
+                    echo "All JAR files found:" && \\
+                    find . -name "*.jar" -type f && \\
+                    exit 1; \\
+                fi
+            
+            # 최종 JAR 파일 검증
+            RUN echo "Final JAR verification:" && \\
+                ls -la app.jar && \\
+                echo "Checking app.jar manifest:" && \\
+                jar tf app.jar | grep -E "MANIFEST.MF|BOOT-INF" | head -5
+            
             EXPOSE 8080
+            
+            # 헬스체크 추가
+            HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \\
+                CMD curl -f http://localhost:8080/actuator/health || curl -f http://localhost:8080/ || exit 1
+            
             CMD ["java", "-jar", "app.jar"]
             """;
     }
