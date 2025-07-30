@@ -1,44 +1,139 @@
-# Gradle
-.gradle
+# ===================
+# 📦 빌드 시스템
+# ===================
+
+# Gradle build
+.gradle/
 build/
-!gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
+!gradle/wrapper/gradle-wrapper.jar
 
-# STS
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-bin/
-!**/src/main/**/bin/
-!**/src/test/**/bin/
+# ===================
+# 💡 IDE 설정 파일
+# ===================
 
 # IntelliJ IDEA
-.idea
+.idea/
 *.iws
 *.iml
 *.ipr
 out/
-!**/src/main/**/out/
-!**/src/test/**/out/
+.idea_modules/
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/dictionaries
+.idea/**/shelf
+.idea/**/aws.xml
+.idea/**/contentModel.xml
+.idea/**/dataSources*
+.idea/**/uiDesigner.xml
+.idea/**/dbnavigator.xml
+.idea/**/mongoSettings.xml
+.idea/**/sonarlint/
+.idea/httpRequests
+.idea/caches/build_file_checksums.ser
+.idea/codestream.xml
+.idea/**/azureSettings.xml
 
-# NetBeans
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-
-# VS Code
+# VSCode
 .vscode/
 
-# 기타(추천)
-*.log
-.env
+# Eclipse / Spring Tool Suite
+.classpath
+.project
+.factorypath
+.settings/
+.springBeans
+.sts4-cache
+.apt_generated/
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+# ===================
+# 🔧 운영체제 별 무시
+# ===================
+
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+*.icloud
+
+# Windows
 Thumbs.db
-``
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# ===================
+# ☕ Java 관련 무시
+# ===================
+
+# Class files
+*.class
+
+# Logs
+*.log
+
+# Java Crash Reports
+hs_err_pid*
+replay_pid*
+
+# Java Archives
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# ===================
+# 📄 문서/기타
+# ===================
+
+HELP.md
+README.md
+
+application-*.properties
+
+# ===================
+# 🗄️ H2 Database
+# ===================
+
+# H2 DB 파일 (예: ./data/testdb.mv.db)
+*.mv.db
+*.trace.db
+
+# H2 저장 디렉터리 (예: ./data/)
+data/
+
+docker-compose.yml
