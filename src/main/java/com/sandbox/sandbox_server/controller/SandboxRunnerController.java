@@ -155,4 +155,31 @@ public class SandboxRunnerController {
             ));
         }
     }
+
+    @GetMapping("/logs/{uuid}")
+    public ResponseEntity<?> getContainerLogs(
+            @PathVariable String uuid,
+            @RequestParam(defaultValue = "50") int lines,
+            @RequestParam(defaultValue = "false") boolean follow,
+            @RequestParam(defaultValue = "all") String since) {
+
+        try {
+            log.info("Getting container logs - uuid: {}, lines: {}", uuid, lines);
+
+            Map<String, Object> logs = sandboxService.getContainerLogs(uuid, lines, follow, since);
+
+            return ResponseEntity.ok(logs);
+
+        } catch (Exception e) {
+            log.error("Failed to get container logs: {}", uuid, e);
+            return ResponseEntity.status(500).body(Map.of(
+                    "uuid", uuid,
+                    "status", "ERROR",
+                    "error", e.getMessage(),
+                    "stdout", "",
+                    "stderr", "",
+                    "logs", ""
+            ));
+        }
+    }
 }

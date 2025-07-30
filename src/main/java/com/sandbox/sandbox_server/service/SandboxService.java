@@ -8,6 +8,9 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.net.URL;
 import java.nio.file.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -317,6 +320,131 @@ public class SandboxService {
             }
         } catch (IOException e) {
             log.warn("Failed to cleanup project directory: {}", projectDir, e);
+        }
+    }
+
+    /**
+     * 컨테이너 로그 조회
+     */
+    public Map<String, Object> getContainerLogs(String uuid, int lines, boolean follow, String since) {
+        try {
+            String containerName = "sandbox-" + uuid;
+
+            // 먼저 컨테이너 존재 여부 확인
+            ProcessBuilder checkBuilder = new ProcessBuilder("docker", "ps", "-a", "--filter", "name=" + containerName, "--format", "{{.Names}}");
+            Process checkProcess = checkBuilder.start();
+
+            StringBuilder containerCheck = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    containerCheck.append(line);
+                }
+            }
+
+            checkProcess.waitFor(5, TimeUnit.SECONDS);
+
+            if (containerCheck.toString().trim().isEmpty()) {
+                return Map.of(
+                        "uuid", uuid,
+                        "containerName", containerName,
+                        "status", "CONTAINER_NOT_FOUND",
+                        "stdout", "",
+                        "stderr", "Container not found",
+                        "exitCode", -1,
+                        "timestamp", System.currentTimeMillis(),
+                        "message", "컨테이너를 찾을 수 없습니다."
+                );
+            }
+
+            // 컨테이너가 존재하면 로그 조회
+            List<String> command = new ArrayList<>();
+            command.add("docker");
+            command.add("logs");
+
+            if (lines > 0) {
+                command.add("--tail");
+                command.add(String.valueOf(lines));
+            }
+
+            if (follow) {
+                command.add("--follow");
+            }
+
+            if (!"all".equals(since)) {
+                command.add("--since");
+                command.add(since);
+            }
+
+            command.add("--timestamps");
+            command.add(containerName);
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            Process process = pb.start();
+
+            StringBuilder stdout = new StringBuilder();
+            StringBuilder stderr = new StringBuilder();
+
+            // stdout과 stderr 동시 읽기
+            CompletableFuture<Void> stdoutFuture = CompletableFuture.runAsync(() -> {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stdout.append(line).append("\n");
+                    }
+                } catch (IOException e) {
+                    log.error("Error reading stdout", e);
+                }
+            });
+
+            CompletableFuture<Void> stderrFuture = CompletableFuture.runAsync(() -> {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stderr.append(line).append("\n");
+                    }
+                } catch (IOException e) {
+                    log.error("Error reading stderr", e);
+                }
+            });
+
+            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new RuntimeException("Docker logs command timed out");
+            }
+
+            // 출력 스레드 완료 대기
+            stdoutFuture.get(5, TimeUnit.SECONDS);
+            stderrFuture.get(5, TimeUnit.SECONDS);
+
+            String stdoutStr = stdout.toString();
+            String stderrStr = stderr.toString();
+
+            return Map.of(
+                    "uuid", uuid,
+                    "containerName", containerName,
+                    "stdout", stdoutStr,
+                    "stderr", stderrStr,
+                    "logs", stdoutStr, // logs 필드 추가 (호환성)
+                    "exitCode", process.exitValue(),
+                    "timestamp", System.currentTimeMillis(),
+                    "status", "SUCCESS",
+                    "hasLogs", !stdoutStr.trim().isEmpty(),
+                    "linesReturned", stdoutStr.split("\n").length
+            );
+
+        } catch (Exception e) {
+            log.error("Failed to get container logs: {}", uuid, e);
+            return Map.of(
+                    "uuid", uuid,
+                    "status", "ERROR",
+                    "error", e.getMessage(),
+                    "timestamp", System.currentTimeMillis(),
+                    "stdout", "",
+                    "stderr", "",
+                    "logs", ""
+            );
         }
     }
 }
