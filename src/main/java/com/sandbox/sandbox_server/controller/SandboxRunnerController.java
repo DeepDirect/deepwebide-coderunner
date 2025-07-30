@@ -22,22 +22,28 @@ public class SandboxRunnerController {
 
     @PostMapping("/run")
     public ResponseEntity<SandboxRunResponse> runContainer(@RequestBody SandboxRunRequest request) {
+        long startTime = System.currentTimeMillis();
+
         try {
             log.info("Received sandbox run request - uuid: {}, framework: {}, port: {}",
                     request.getUuid(), request.getFramework(), request.getPort());
 
+            // 기존과 동일하게 호출하지만, 내부적으로 중복 실행 방지 로직이 작동
             String result = sandboxService.runProject(
-                    request.getUuid(),
+                    request.getUuid(),      // uuid를 프로젝트 식별자로 사용
                     request.getUrl(),
                     request.getFramework(),
                     request.getPort()
             );
+
+            long executionTime = System.currentTimeMillis() - startTime;
 
             SandboxRunResponse response = SandboxRunResponse.builder()
                     .message("실행 완료")
                     .result(result)
                     .status("SUCCESS")
                     .executionId(request.getUuid())
+                    .executionTime(executionTime)
                     .build();
 
             return ResponseEntity.ok(response);
@@ -45,11 +51,14 @@ public class SandboxRunnerController {
         } catch (Exception e) {
             log.error("Sandbox execution failed", e);
 
+            long executionTime = System.currentTimeMillis() - startTime;
+
             SandboxRunResponse response = SandboxRunResponse.builder()
                     .message("실행 실패")
                     .error(e.getMessage())
                     .status("FAILED")
                     .executionId(request.getUuid())
+                    .executionTime(executionTime)
                     .build();
 
             return ResponseEntity.status(500).body(response);
@@ -84,6 +93,63 @@ public class SandboxRunnerController {
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of(
                     "uuid", uuid,
+                    "status", "ERROR",
+                    "error", e.getMessage()
+            ));
+        }
+    }
+
+    /**
+     * 특정 프로젝트 중지 (추가)
+     */
+    @DeleteMapping("/stop/{uuid}")
+    public ResponseEntity<?> stopProject(@PathVariable String uuid) {
+        try {
+            log.info("Received stop request for uuid: {}", uuid);
+
+            boolean success = sandboxService.stopProject(uuid);
+
+            if (success) {
+                return ResponseEntity.ok(Map.of(
+                        "uuid", uuid,
+                        "status", "STOPPED",
+                        "message", "프로젝트가 성공적으로 중지되었습니다."
+                ));
+            } else {
+                return ResponseEntity.ok(Map.of(
+                        "uuid", uuid,
+                        "status", "NOT_FOUND",
+                        "message", "실행 중인 컨테이너가 없습니다."
+                ));
+            }
+
+        } catch (Exception e) {
+            log.error("Failed to stop project: {}", uuid, e);
+            return ResponseEntity.status(500).body(Map.of(
+                    "uuid", uuid,
+                    "status", "ERROR",
+                    "error", e.getMessage()
+            ));
+        }
+    }
+
+    /**
+     * 현재 실행 중인 모든 프로젝트 조회 (추가)
+     */
+    @GetMapping("/active")
+    public ResponseEntity<?> getActiveContainers() {
+        try {
+            Map<String, String> activeContainers = sandboxService.getActiveContainers();
+
+            return ResponseEntity.ok(Map.of(
+                    "active_containers", activeContainers,
+                    "count", activeContainers.size(),
+                    "status", "SUCCESS"
+            ));
+
+        } catch (Exception e) {
+            log.error("Failed to get active containers", e);
+            return ResponseEntity.status(500).body(Map.of(
                     "status", "ERROR",
                     "error", e.getMessage()
             ));

@@ -1,6 +1,7 @@
 package com.sandbox.sandbox_server.service;
 
 import com.sandbox.sandbox_server.util.DockerfileUtil;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -8,6 +9,7 @@ import java.io.*;
 import java.net.URL;
 import java.nio.file.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -18,31 +20,42 @@ public class SandboxService {
 
     private static final int DOCKER_TIMEOUT_SECONDS = 300;
 
+    // 실행 중인 컨테이너 추적을 위한 맵 (uuid -> 컨테이너명)
+    // uuid를 프로젝트 식별자로 사용
+    private final ConcurrentHashMap<String, String> activeContainers = new ConcurrentHashMap<>();
+
     /**
-     * 프로젝트 실행 전체 프로세스 (S3 다운로드 → 압축 해제 → Dockerfile 생성 → 도커 실행)
-     * @return 실행 결과 문자열(컨테이너명:포트)
+     * 프로젝트 실행 전체 프로세스
+     * @param uuid 프로젝트 식별자 (동일한 uuid의 중복 실행 방지)
      */
     public String runProject(String uuid, String s3Url, String framework, int port) throws IOException {
         log.info("Starting project execution - uuid: {}, framework: {}, port: {}", uuid, framework, port);
+
+        // 1. 기존 실행 중인 컨테이너 정리 (동일 uuid)
+        stopExistingContainer(uuid);
 
         Path projectDir = Paths.get("uploads", uuid);
         Files.createDirectories(projectDir);
 
         try {
-            // 1. S3에서 ZIP 다운로드
+            // 2. S3에서 ZIP 다운로드
             Path zipPath = downloadFromS3(s3Url, projectDir);
 
-            // 2. 압축 해제
+            // 3. 압축 해제
             unzip(zipPath.toFile(), projectDir.toFile());
 
-            // 3. 프로젝트 구조 정규화 (옵션)
+            // 4. 프로젝트 구조 정규화 (옵션)
             normalizeProjectStructure(projectDir.toFile());
 
-            // 4. Dockerfile 생성
+            // 5. Dockerfile 생성
             DockerfileUtil.generateDockerfile(projectDir, framework);
 
-            // 5. Docker 빌드 및 실행
+            // 6. Docker 빌드 및 실행
+            String containerName = "sandbox-" + uuid;
             runDockerContainer(uuid, port, framework);
+
+            // 7. 활성 컨테이너 목록에 추가
+            activeContainers.put(uuid, containerName);
 
             log.info("Project execution completed - uuid: {}, port: {}", uuid, port);
             return uuid + ":" + port;
@@ -53,6 +66,125 @@ public class SandboxService {
             throw new IOException("Project execution failed: " + e.getMessage(), e);
         }
     }
+
+    /**
+     * 기존 실행 중인 컨테이너 중지 및 정리
+     */
+    private void stopExistingContainer(String uuid) {
+        String existingContainer = activeContainers.get(uuid);
+        if (existingContainer != null) {
+            log.info("Stopping existing container for uuid {}: {}", uuid, existingContainer);
+
+            try {
+                // Docker 컨테이너 강제 중지
+                ProcessBuilder stopBuilder = new ProcessBuilder("docker", "stop", existingContainer);
+                Process stopProcess = stopBuilder.start();
+
+                boolean stopFinished = stopProcess.waitFor(30, TimeUnit.SECONDS);
+                if (!stopFinished) {
+                    log.warn("Container stop timed out, forcing kill: {}", existingContainer);
+                    stopProcess.destroyForcibly();
+                }
+
+                // Docker 컨테이너 삭제
+                ProcessBuilder rmBuilder = new ProcessBuilder("docker", "rm", "-f", existingContainer);
+                Process rmProcess = rmBuilder.start();
+
+                boolean rmFinished = rmProcess.waitFor(10, TimeUnit.SECONDS);
+                if (!rmFinished) {
+                    log.warn("Container removal timed out: {}", existingContainer);
+                    rmProcess.destroyForcibly();
+                }
+
+                // Docker 이미지도 삭제 (옵션)
+                ProcessBuilder rmiBuilder = new ProcessBuilder("docker", "rmi", "-f", existingContainer);
+                Process rmiProcess = rmiBuilder.start();
+                rmiProcess.waitFor(10, TimeUnit.SECONDS);
+
+                log.info("Successfully stopped and removed container: {}", existingContainer);
+
+            } catch (Exception e) {
+                log.error("Failed to stop existing container {}: {}", existingContainer, e.getMessage());
+
+                // 강제로 모든 관련 컨테이너 정리 시도
+                try {
+                    ProcessBuilder forceCleanup = new ProcessBuilder(
+                            "bash", "-c",
+                            String.format("docker ps -a | grep %s | awk '{print $1}' | xargs -r docker rm -f", existingContainer)
+                    );
+                    forceCleanup.start().waitFor(10, TimeUnit.SECONDS);
+                } catch (Exception cleanupEx) {
+                    log.warn("Force cleanup also failed for {}: {}", existingContainer, cleanupEx.getMessage());
+                }
+
+            } finally {
+                // 맵에서 제거
+                activeContainers.remove(uuid);
+            }
+        }
+    }
+
+    /**
+     * 특정 프로젝트의 실행 중인 컨테이너 수동 중지
+     */
+    public boolean stopProject(String uuid) {
+        String containerName = activeContainers.get(uuid);
+        if (containerName == null) {
+            log.info("No running container found for uuid: {}", uuid);
+            return false;
+        }
+
+        try {
+            stopExistingContainer(uuid);
+            log.info("Successfully stopped project: {}", uuid);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to stop project {}: {}", uuid, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 현재 실행 중인 모든 컨테이너 목록 조회
+     */
+    public java.util.Map<String, String> getActiveContainers() {
+        return new java.util.HashMap<>(activeContainers);
+    }
+
+    /**
+     * 애플리케이션 종료 시 모든 컨테이너 정리
+     */
+    @PreDestroy
+    public void cleanupAllContainers() {
+        if (!activeContainers.isEmpty()) {
+            log.info("Cleaning up {} active containers on shutdown...", activeContainers.size());
+
+            for (java.util.Map.Entry<String, String> entry : activeContainers.entrySet()) {
+                String uuid = entry.getKey();
+                String containerName = entry.getValue();
+
+                try {
+                    log.info("Stopping container on shutdown - uuid: {}, container: {}", uuid, containerName);
+
+                    ProcessBuilder stopBuilder = new ProcessBuilder("docker", "stop", containerName);
+                    Process stopProcess = stopBuilder.start();
+                    stopProcess.waitFor(10, TimeUnit.SECONDS);
+
+                    ProcessBuilder rmBuilder = new ProcessBuilder("docker", "rm", "-f", containerName);
+                    Process rmProcess = rmBuilder.start();
+                    rmProcess.waitFor(5, TimeUnit.SECONDS);
+
+                } catch (Exception e) {
+                    log.error("Failed to cleanup container on shutdown - {}: {}", containerName, e.getMessage());
+                }
+            }
+
+            activeContainers.clear();
+            log.info("Container cleanup completed");
+        }
+    }
+
+    // 나머지 기존 메서드들은 그대로...
 
     private Path downloadFromS3(String s3Url, Path projectDir) throws IOException {
         log.debug("Downloading file from S3: {}", s3Url);
@@ -82,7 +214,6 @@ public class SandboxService {
                     });
         }
 
-        // 압축 파일 삭제
         Files.deleteIfExists(zipFile.toPath());
         log.debug("Zip extraction completed");
     }
@@ -97,7 +228,6 @@ public class SandboxService {
     private void extractZipEntry(ZipFile zip, ZipEntry entry, File destDir) throws IOException {
         File destFile = new File(destDir, entry.getName());
 
-        // 디렉토리 트래버설 방지
         if (!destFile.getCanonicalPath().startsWith(destDir.getCanonicalPath())) {
             throw new IOException("Entry is outside of the target dir: " + entry.getName());
         }
@@ -111,7 +241,6 @@ public class SandboxService {
                 in.transferTo(out);
             }
 
-            // 실행 권한
             if (entry.getName().endsWith("gradlew") || entry.getName().endsWith(".sh")) {
                 destFile.setExecutable(true);
                 log.debug("Set executable permission for: {}", entry.getName());
@@ -120,13 +249,9 @@ public class SandboxService {
     }
 
     private void normalizeProjectStructure(File destDir) throws IOException {
-        // (옵션) 프로젝트 폴더 내부에 실제 소스가 또 들어있으면 루트로 올려주는 작업
-        // 생략 가능: 이미 ZIP 구조가 맞는 경우 그대로 진행
+        // 프로젝트 구조 정규화 로직
     }
 
-    /**
-     * 도커 빌드 및 컨테이너 실행
-     */
     private void runDockerContainer(String uuid, int port, String framework) throws IOException, InterruptedException {
         log.info("Running docker container - uuid: {}, port: {}, framework: {}", uuid, port, framework);
 
@@ -146,7 +271,6 @@ public class SandboxService {
 
         Process process = pb.start();
 
-        // 실시간 출력 로깅
         StringBuilder output = new StringBuilder();
         CompletableFuture<Void> outputFuture = CompletableFuture.runAsync(() -> {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
@@ -168,7 +292,6 @@ public class SandboxService {
             throw new IOException("Docker execution timed out after " + DOCKER_TIMEOUT_SECONDS + " seconds");
         }
 
-        // 출력 스레드 완료 대기
         try {
             outputFuture.get(10, TimeUnit.SECONDS);
         } catch (Exception e) {
@@ -184,12 +307,11 @@ public class SandboxService {
     }
 
     private void cleanupResources(String uuid) {
-        // 프로젝트 디렉토리 삭제 등 정리 로직 (선택)
         Path projectDir = Paths.get("uploads", uuid);
         try {
             if (Files.exists(projectDir)) {
                 Files.walk(projectDir)
-                        .sorted((a, b) -> b.compareTo(a)) // 하위부터 삭제
+                        .sorted((a, b) -> b.compareTo(a))
                         .map(Path::toFile)
                         .forEach(File::delete);
             }
