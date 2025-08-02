@@ -146,7 +146,7 @@ docker rmi -f "$IMG" 2>/dev/null || true
 
 # Docker 빌드
 echo "Building Docker image..."
-if ! docker build --progress=plain --no-cache -t "$IMG" "$WORKDIR"; then
+if ! docker build --no-cache -t "$IMG" "$WORKDIR"; then
     echo "ERROR: Docker build failed"
     exit 1
 fi
